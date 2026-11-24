@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Đọc tiếng Nhật – bấm để tra</title>
+<style>
+:root{--bg:#faf8f4;--card:#fff;--ink:#222;--mute:#777;--line:#e4dfd6;--acc:#c0392b;--accbg:#fbeae7;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#999;--line:#3a3733;--acc:#ff7b6b;--accbg:#3a2623}}
+:root[data-theme="dark"]{--bg:#1b1a18;--card:#262421;--ink:#eee;--mute:#999;--line:#3a3733;--acc:#ff7b6b;--accbg:#3a2623}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,"Hiragino Sans","Yu Gothic","Noto Sans JP",sans-serif}
+header{max-width:820px;margin:0 auto;padding:16px 16px 0}
+h1{font-size:20px;margin:0 0 10px}
+.bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+button,label.btn{font:inherit;font-size:14px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:6px 12px;border-radius:8px;cursor:pointer}
+button:hover,label.btn:hover{border-color:var(--acc)}
+input[type=file]{display:none}
+textarea{font:inherit;font-size:16px;width:100%;min-height:110px;border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:8px 12px;margin-top:10px}
+#page{max-width:820px;margin:12px auto 0;padding:0 16px 260px}
+#reader{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;font-size:24px;line-height:2.2;white-space:pre-wrap;word-break:break-all;min-height:200px}
+.t{cursor:pointer;border-radius:4px;padding:2px 0}
+.t:hover{background:var(--accbg)}
+.t.on{background:var(--acc);color:#fff}
+#panel{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--card);border-top:2px solid var(--acc);padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px));display:none;box-shadow:0 -4px 16px rgba(0,0,0,.12)}
+#panel .in{max-width:820px;margin:0 auto}
+#pw{font-size:30px;font-weight:600;line-height:1.3}
+#pr{color:var(--acc);font-size:18px}
+#pm{font-size:17px;margin-top:4px;white-space:pre-wrap}
+#px{color:var(--mute);font-size:14px;margin-top:4px}
+.top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.note{font-size:13px;color:var(--mute);margin:8px 0}
+a{color:var(--acc)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Đọc tiếng Nhật – bấm vào từ để nghe & tra nghĩa</h1>
+  <div class="bar">
+    <label class="btn">📂 Mở file (.txt)<input type="file" id="file" accept=".txt,.md,.csv,text/plain"></label>
+    <button id="paste">✏️ Dán văn bản</button>
+    <button id="smaller">A−</button><button id="bigger">A+</button>
+    <button id="readall">🔊 Đọc cả đoạn</button>
+  </div>
+  <div id="pbox" style="display:none">
+    <textarea id="src" placeholder="Dán văn bản tiếng Nhật vào đây…"></textarea>
+    <div class="bar" style="margin-top:6px"><button id="go">Hiển thị cả trang</button></div>
+  </div>
+  <p class="note">Bấm vào một từ để nghe đọc ngay. Muốn xem nghĩa tiếng Việt thì bấm thêm nút “Tra nghĩa”.</p>
+</header>
+<div id="page"><div id="reader"></div></div>
+
+<div id="panel"><div class="in">
+  <div class="top">
+    <div><div id="pw"></div><div id="pr"></div></div>
+    <div class="bar"><button id="look">🔍 Tra nghĩa</button><button id="play">🔊 Nghe lại</button><button id="close">✕</button></div>
+  </div>
+  <div id="pm"></div>
+  <div id="px"></div>
+</div></div>
+
+<script>
+var DEMO = "私は毎日学校で日本語を勉強します。\n先生はとても親切です。友達と一緒に本を読みました。";
+var text = "", cur = null, voice = null, sampleFn = null, fontSize = 24, cache = {};
+try { cache = JSON.parse(localStorage.getItem("ja_vi_cache") || "{}"); } catch(e){}
+function saveCache(){ try { localStorage.setItem("ja_vi_cache", JSON.stringify(cache)); } catch(e){} }
+
+function pickVoice(){ var vs = (window.speechSynthesis && speechSynthesis.getVoices()) || []; voice = vs.find(function(v){return /^ja/i.test(v.lang)}) || null; }
+if (window.speechSynthesis){ pickVoice(); speechSynthesis.onvoiceschanged = pickVoice; }
+function speak(t){
+  if (!window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  var u = new SpeechSynthesisUtterance(t); u.lang = "ja-JP"; u.rate = 0.85;
+  if (voice) u.voice = voice;
+  speechSynthesis.speak(u);
+}
+
+if (window.claude && claude.use){ claude.use("sample").then(function(s){ sampleFn = s || null; }).catch(function(){}); }
+
+function render(){
+  var box = document.getElementById("reader"); box.innerHTML = "";
+  var segs = [];
+  if (window.Intl && Intl.Segmenter){ for (var s of new Intl.Segmenter("ja",{granularity:"word"}).segment(text)) segs.push(s); }
+  else text.split("").forEach(function(c,i){ segs.push({index:i, segment:c, isWordLike:/\S/.test(c)}); });
+  segs.forEach(function(s){
+    if (!s.isWordLike || /^[\d\s]+$/.test(s.segment)) { box.appendChild(document.createTextNode(s.segment)); return; }
+    var el = document.createElement("span"); el.className = "t"; el.textContent = s.segment;
+    el.onclick = function(){
+      document.querySelectorAll(".t.on").forEach(function(x){x.classList.remove("on")});
+      el.classList.add("on"); lookup(s.segment, s.index);
+    };
+    box.appendChild(el);
+  });
+}
+
+function sentenceAt(i){
+  var a = i, b = i;
+  while (a > 0 && !/[。！？!?\n]/.test(text[a-1])) a--;
+  while (b < text.length && !/[。！？!?\n]/.test(text[b])) b++;
+  return text.slice(a, Math.min(b+1, text.length)).trim();
+}
+
+function setPanel(w, r, m, x){
+  document.getElementById("panel").style.display = "block";
+  document.getElementById("pw").textContent = w;
+  document.getElementById("pr").textContent = r || "";
+  document.getElementById("pm").textContent = m || "";
+  var px = document.getElementById("px"); px.textContent = x ? x + "  ·  " : "";
+  var a = document.createElement("a");
+  a.href = "https://mazii.net/vi-VN/search/word/javi/" + encodeURIComponent(w);
+  a.target = "_blank"; a.rel = "noopener"; a.textContent = "Mở trên Mazii";
+  px.appendChild(a);
+}
+
+async function lookup(word, idx){
+  var ctx = sentenceAt(idx);
+  var key = word + "|" + ctx;
+  cur = {w: word, r: "", key: key, ctx: ctx};
+  speak(word);
+  document.getElementById("look").style.display = "";
+  if (cache[key]){ show(cache[key], word); return; }
+  setPanel(word, "", "Bấm “Tra nghĩa” để xem nghĩa tiếng Việt (mỗi lần tra tính vào hạn mức sử dụng).", "");
+}
+async function doLookup(){
+  if (!cur) return;
+  var word = cur.w, ctx = cur.ctx, key = cur.key;
+  if (cache[key]){ show(cache[key], word); return; }
+  if (!sampleFn){ setPanel(word, "", "Chưa tra trực tuyến được trong chế độ xem này. Bấm “Mở trên Mazii” để xem nghĩa.", ""); return; }
+  setPanel(word, "", "Đang tra nghĩa…", "");
+  try {
+    var prompt = "Bạn là từ điển Nhật–Việt. Từ cần tra: 「" + word + "」 trong câu: 「" + ctx + "」.\n" +
+      "Trả lời CHỈ bằng một JSON, không kèm giải thích hay dấu ```: " +
+      "{\"dictionary_form\":\"dạng từ điển nếu khác\",\"reading\":\"cách đọc bằng hiragana\",\"pos\":\"loại từ bằng tiếng Việt\",\"meaning\":\"nghĩa tiếng Việt ngắn gọn, đúng theo ngữ cảnh câu\",\"note\":\"ghi chú ngữ pháp ngắn nếu là trợ từ/biến thể, hoặc rỗng\"}";
+    var res = await sampleFn(prompt, {modelTier:"quick"});
+    var t = (res.text || "").replace(/```json|```/g, "").trim();
+    var d = JSON.parse(t.slice(t.indexOf("{"), t.lastIndexOf("}") + 1));
+    cache[key] = d; saveCache();
+    if (cur && cur.w === word) show(d, word);
+  } catch(e){
+    var msg = (e && e.code === "not_granted") ? "Bạn chưa cho phép tra trực tuyến. Bấm từ lần nữa và chọn cho phép, hoặc mở Mazii." :
+              (e && e.code === "rate_limited") ? "Đang tra quá nhanh, đợi một chút rồi bấm lại." : "Không tra được lúc này. Bạn thử Mazii nhé.";
+    setPanel(word, "", msg, "");
+  }
+}
+function show(d, word){
+  var title = d.dictionary_form && d.dictionary_form !== word ? word + "  →  " + d.dictionary_form : word;
+  cur = {w: word, r: d.reading || "", key: cur && cur.key, ctx: cur && cur.ctx};
+  document.getElementById("look").style.display = "none";
+  var m = d.meaning || "";
+  if (d.note) m += "\n" + d.note;
+  setPanel(title, d.reading, m, d.pos);
+  if (d.reading) speak(d.reading);
+}
+
+document.getElementById("play").onclick = function(){ if (cur) speak(cur.r || cur.w); };
+document.getElementById("look").onclick = doLookup;
+document.getElementById("close").onclick = function(){ document.getElementById("panel").style.display = "none"; };
+document.getElementById("readall").onclick = function(){ speak(text); };
+document.getElementById("paste").onclick = function(){ var b = document.getElementById("pbox"); b.style.display = b.style.display === "none" ? "block" : "none"; };
+document.getElementById("go").onclick = function(){ text = document.getElementById("src").value; render(); document.getElementById("pbox").style.display = "none"; };
+function fs(d){ fontSize = Math.max(16, Math.min(48, fontSize + d)); document.getElementById("reader").style.fontSize = fontSize + "px"; }
+document.getElementById("bigger").onclick = function(){ fs(2); };
+document.getElementById("smaller").onclick = function(){ fs(-2); };
+document.getElementById("file").onchange = function(e){
+  var f = e.target.files[0]; if (!f) return;
+  var r = new FileReader();
+  r.onload = function(){ text = String(r.result).replace(/^\uFEFF/, ""); render(); window.scrollTo(0,0); };
+  r.readAsText(f, "utf-8");
+};
+text = DEMO; render();
+</script>
+</body>
+</html>
