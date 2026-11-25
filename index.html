@@ -38,16 +38,18 @@ a{color:var(--acc)}
 <header>
   <h1>Đọc tiếng Nhật – bấm vào từ để nghe & tra nghĩa</h1>
   <div class="bar">
-    <label class="btn">📂 Mở file (.txt)<input type="file" id="file" accept=".txt,.md,.csv,text/plain"></label>
+    <label class="btn">📂 Mở file<input type="file" id="file" accept=".txt,.md,.csv,.html,.htm,.docx,.pdf,.xlsx,.xls,image/*"></label>
+    <label class="btn">📷 Chụp ảnh<input type="file" id="cam" accept="image/*" capture="environment"></label>
     <button id="paste">✏️ Dán văn bản</button>
     <button id="smaller">A−</button><button id="bigger">A+</button>
     <button id="readall">🔊 Đọc cả đoạn</button>
+    <span id="status" class="note" style="margin:0"></span>
   </div>
   <div id="pbox" style="display:none">
     <textarea id="src" placeholder="Dán văn bản tiếng Nhật vào đây…"></textarea>
     <div class="bar" style="margin-top:6px"><button id="go">Hiển thị cả trang</button></div>
   </div>
-  <p class="note">Bấm vào một từ để nghe đọc ngay. Muốn xem nghĩa tiếng Việt thì bấm thêm nút “Tra nghĩa”.</p>
+  <p class="note">Bấm vào một từ để nghe đọc ngay. Muốn xem nghĩa tiếng Việt thì bấm thêm nút “Tra nghĩa”. Hỗ trợ file TXT, PDF, Word, Excel, HTML và ảnh; đọc chữ từ ảnh chụp cũng tính vào hạn mức sử dụng.</p>
 </header>
 <div id="page"><div id="reader"></div></div>
 
@@ -60,6 +62,9 @@ a{color:var(--acc)}
   <div id="px"></div>
 </div></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 var DEMO = "私は毎日学校で日本語を勉強します。\n先生はとても親切です。友達と一緒に本を読みました。";
 var text = "", cur = null, voice = null, sampleFn = null, fontSize = 24, cache = {};
@@ -162,12 +167,65 @@ document.getElementById("go").onclick = function(){ text = document.getElementBy
 function fs(d){ fontSize = Math.max(16, Math.min(48, fontSize + d)); document.getElementById("reader").style.fontSize = fontSize + "px"; }
 document.getElementById("bigger").onclick = function(){ fs(2); };
 document.getElementById("smaller").onclick = function(){ fs(-2); };
-document.getElementById("file").onchange = function(e){
-  var f = e.target.files[0]; if (!f) return;
-  var r = new FileReader();
-  r.onload = function(){ text = String(r.result).replace(/^\uFEFF/, ""); render(); window.scrollTo(0,0); };
-  r.readAsText(f, "utf-8");
-};
+var statusEl = document.getElementById("status");
+function setText(t){
+  t = String(t || "").replace(/^\uFEFF/, "").trim();
+  if (!t){ statusEl.textContent = "Không tìm thấy chữ trong file này."; return; }
+  text = t; statusEl.textContent = ""; render(); window.scrollTo(0,0);
+}
+function readAs(f, how){
+  return new Promise(function(res, rej){
+    var r = new FileReader(); r.onload = function(){ res(r.result); }; r.onerror = rej;
+    if (how === "buf") r.readAsArrayBuffer(f); else r.readAsText(f, "utf-8");
+  });
+}
+async function shrink(f){
+  var bmp = await createImageBitmap(f), k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+  var c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise(function(res){ c.toBlob(res, "image/jpeg", 0.85); });
+}
+async function ocr(f){
+  if (!sampleFn || !(await sampleFn.limits()).images){ statusEl.textContent = "Chưa đọc được chữ từ ảnh trong chế độ xem này."; return; }
+  statusEl.textContent = "Đang đọc chữ trong ảnh…";
+  var blob = await shrink(f);
+  var res = await sampleFn("Đây là ảnh chụp văn bản tiếng Nhật. Hãy chép lại chính xác toàn bộ chữ tiếng Nhật trong ảnh, giữ nguyên xuống dòng. Chỉ trả về phần chữ đã chép, không dịch, không giải thích, không thêm furigana.", {images: [blob], cache: false});
+  setText(res.text);
+}
+async function readPdf(f){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  var doc = await pdfjsLib.getDocument({data: new Uint8Array(await readAs(f, "buf"))}).promise;
+  var n = Math.min(doc.numPages, 40), out = [];
+  for (var p = 1; p <= n; p++){
+    statusEl.textContent = "Đang đọc PDF " + p + "/" + n + "…";
+    var tc = await (await doc.getPage(p)).getTextContent();
+    out.push(tc.items.map(function(i){ return i.str + (i.hasEOL ? "\n" : ""); }).join(""));
+  }
+  if (!out.join("").trim()){ statusEl.textContent = "PDF này có vẻ là bản scan (không có chữ). Hãy chụp hoặc chọn ảnh từng trang."; return; }
+  setText(out.join("\n\n"));
+  if (doc.numPages > n) statusEl.textContent = "Chỉ hiển thị " + n + " trang đầu.";
+}
+async function openFile(f){
+  var n = f.name.toLowerCase();
+  try {
+    statusEl.textContent = "Đang mở…";
+    if (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic)$/.test(n)) await ocr(f);
+    else if (/\.pdf$/.test(n)) await readPdf(f);
+    else if (/\.docx$/.test(n)) setText((await mammoth.extractRawText({arrayBuffer: await readAs(f, "buf")})).value);
+    else if (/\.xlsx?$/.test(n)){
+      var wb = XLSX.read(await readAs(f, "buf"), {type: "array"});
+      setText(wb.SheetNames.map(function(s){ return XLSX.utils.sheet_to_txt(wb.Sheets[s]); }).join("\n\n"));
+    }
+    else if (/\.html?$/.test(n)) setText(new DOMParser().parseFromString(await readAs(f), "text/html").body.textContent);
+    else setText(await readAs(f));
+  } catch(e){
+    statusEl.textContent = (e && e.code === "not_granted") ? "Bạn chưa cho phép đọc ảnh bằng Claude." : "Không mở được file này.";
+  }
+}
+["file", "cam"].forEach(function(id){
+  var el = document.getElementById(id);
+  el.onchange = function(e){ var f = e.target.files[0]; if (f) openFile(f); el.value = ""; };
+});
 text = DEMO; render();
 </script>
 </body>
