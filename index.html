@@ -81,7 +81,8 @@ function speak(t){
   speechSynthesis.speak(u);
 }
 
-if (window.claude && claude.use){ claude.use("sample").then(function(s){ sampleFn = s || null; }).catch(function(){}); }
+var samplePromise = null;
+if (window.claude && claude.use){ samplePromise = claude.use("sample").then(function(s){ sampleFn = s || null; return sampleFn; }).catch(function(){ return null; }); }
 
 function render(){
   var box = document.getElementById("reader"); box.innerHTML = "";
@@ -180,16 +181,21 @@ function readAs(f, how){
   });
 }
 async function shrink(f){
-  var bmp = await createImageBitmap(f), k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+  var bmp;
+  try { bmp = await createImageBitmap(f); }
+  catch(e){ bmp = await new Promise(function(res, rej){ var im = new Image(); im.onload = function(){ res(im); }; im.onerror = rej; im.src = URL.createObjectURL(f); }); }
+  var k = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
   var c = document.createElement("canvas"); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
   c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
   return new Promise(function(res){ c.toBlob(res, "image/jpeg", 0.85); });
 }
 async function ocr(f){
-  if (!sampleFn || !(await sampleFn.limits()).images){ statusEl.textContent = "Chưa đọc được chữ từ ảnh trong chế độ xem này."; return; }
+  var sf = sampleFn || (samplePromise && await samplePromise);
+  if (!sf){ statusEl.textContent = "Chưa đọc được chữ từ ảnh: trang chưa có quyền dùng Claude. Hãy tải lại trang rồi thử lại."; return; }
+  try { if (!(await sf.limits()).images){ statusEl.textContent = "Chế độ xem này chưa hỗ trợ gửi ảnh cho Claude."; return; } } catch(e){}
   statusEl.textContent = "Đang đọc chữ trong ảnh…";
   var blob = await shrink(f);
-  var res = await sampleFn("Đây là ảnh chụp văn bản tiếng Nhật. Hãy chép lại chính xác toàn bộ chữ tiếng Nhật trong ảnh, giữ nguyên xuống dòng. Chỉ trả về phần chữ đã chép, không dịch, không giải thích, không thêm furigana.", {images: [blob], cache: false});
+  var res = await sf("Đây là ảnh chụp văn bản tiếng Nhật. Hãy chép lại chính xác toàn bộ chữ tiếng Nhật trong ảnh, giữ nguyên xuống dòng. Chỉ trả về phần chữ đã chép, không dịch, không giải thích, không thêm furigana.", {images: [blob], cache: false});
   setText(res.text);
 }
 async function readPdf(f){
@@ -208,7 +214,7 @@ async function readPdf(f){
 async function openFile(f){
   var n = f.name.toLowerCase();
   try {
-    statusEl.textContent = "Đang mở…";
+    statusEl.textContent = "Đang mở…"; window.scrollTo(0,0);
     if (/^image\//.test(f.type) || /\.(jpe?g|png|webp|gif|heic)$/.test(n)) await ocr(f);
     else if (/\.pdf$/.test(n)) await readPdf(f);
     else if (/\.docx$/.test(n)) setText((await mammoth.extractRawText({arrayBuffer: await readAs(f, "buf")})).value);
@@ -219,7 +225,7 @@ async function openFile(f){
     else if (/\.html?$/.test(n)) setText(new DOMParser().parseFromString(await readAs(f), "text/html").body.textContent);
     else setText(await readAs(f));
   } catch(e){
-    statusEl.textContent = (e && e.code === "not_granted") ? "Bạn chưa cho phép đọc ảnh bằng Claude." : "Không mở được file này.";
+    statusEl.textContent = (e && e.code === "not_granted") ? "Bạn chưa cho phép đọc ảnh bằng Claude." : "Không xử lý được: " + ((e && (e.message || e.code)) || "lỗi không rõ");
   }
 }
 ["file", "cam"].forEach(function(id){
