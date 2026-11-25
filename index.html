@@ -38,10 +38,11 @@ a{color:var(--acc)}
 </head>
 <body>
 <header>
-  <h1>Đọc tiếng Nhật – bấm vào từ để nghe & tra nghĩa (v5)</h1>
+  <h1>Đọc tiếng Nhật – bấm vào từ để nghe & tra nghĩa (v6)</h1>
   <div class="bar">
     <label class="btn">📂 Mở file<input type="file" id="file" accept=".txt,.md,.csv,.html,.htm,.docx,.pdf,.xlsx,.xls,image/*"></label>
     <label class="btn">📷 Chụp ảnh<input type="file" id="cam" accept="image/*"></label>
+    <button id="grant">🔑 Cấp quyền</button>
     <button id="paste">✏️ Dán văn bản</button>
     <button id="smaller">A−</button><button id="bigger">A+</button>
     <button id="readall">🔊 Đọc cả đoạn</button>
@@ -230,6 +231,24 @@ async function openFile(f){
     statusEl.textContent = (e && e.code === "not_granted") ? "Bạn chưa cho phép đọc ảnh bằng Claude." : "Không xử lý được: " + ((e && (e.message || e.code)) || "lỗi không rõ");
   }
 }
+function flash(m){ statusEl.textContent = m; setTimeout(function(){ if (statusEl.textContent === m) statusEl.textContent = ""; }, 6000); }
+document.getElementById("grant").onclick = async function(){
+  try {
+    var p = window.claude && claude.use ? await claude.use("permissions") : null;
+    if (!p){ flash("Không mở được hộp cấp quyền ở chế độ xem này. Hãy mở trang bằng tài khoản Claude đã đăng nhập."); return; }
+    var st = await p.state("sample");
+    if (st === "granted"){ flash("✓ Trang đã có quyền dùng Claude."); return; }
+    if (st === "unavailable"){ flash("Quyền dùng Claude không khả dụng ở đây. Hãy đăng nhập Claude trên trình duyệt này rồi tải lại trang."); return; }
+    if (st === "denied"){
+      try { await p.manage(); } catch(e){ flash("Mở menu Permissions của trang để bật lại quyền, rồi tải lại trang."); return; }
+      st = await p.state("sample");
+    } else {
+      st = (await p.request(["sample"])).sample;
+    }
+    if (st === "granted"){ sampleFn = await claude.use("sample"); flash("✓ Đã cấp quyền dùng Claude."); }
+    else flash("Chưa được cấp quyền. Tải lại trang rồi bấm Cấp quyền lần nữa.");
+  } catch(e){ flash("Lỗi: " + ((e && (e.message || e.code)) || "không rõ")); }
+};
 ["file", "cam"].forEach(function(id){
   var el = document.getElementById(id);
   el.onchange = function(e){ var f = e.target.files[0]; if (!f){ statusEl.textContent = "Chưa chọn được file."; return; } openFile(f).then(function(){ el.value = ""; }); };
